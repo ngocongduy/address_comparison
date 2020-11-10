@@ -41,10 +41,10 @@ def group_compare(addr1, addr2, pos_addr1=None, pos_addr2=None):
     elif type(addr1) is dict and type(addr2) is dict:
         addr1_as_groups = addr1
         addr2_as_groups = addr2
-        if None in (addr1_as_groups, addr2_as_groups):
-            for k in group_keys:
-                result[k] = 0
-            return result
+        # if None in (addr1_as_groups, addr2_as_groups):
+        #     for k in group_keys:
+        #         result[k] = 0
+        #     return result
     else:
         for k in group_keys:
             result[k] = 0
@@ -67,8 +67,8 @@ def full_string_compare(addr1: str, addr2: str):
     result = {'normal_ratio': 0, 'partial_ratio': 0}
     if len(addr1) <= 0 or len(addr2) <= 0:
         return result
-    result['normal_ratio'] = fuzz.ratio(addr1, addr2)
-    result['partial_ratio'] = fuzz.partial_ratio(addr1, addr2)
+    result['normal_ratio'] = fuzz.token_sort_ratio(addr1, addr2)
+    result['partial_ratio'] = fuzz.token_set_ratio(addr1, addr2)
     return result
 
 
@@ -208,69 +208,7 @@ class AddressComparer():
                     final_result[k] = 0.1
                 return final_result
 
-    def process_compare(self, addr: str, compare_addr: str):
-        # if len(addr) <= 0 or len(compare_addr) <=0:
-        #     return None
-        cleaned_addr = utils.clean_alphanumeric_delimeter_upper(addr)
-        cleaned_compare_addr = utils.clean_alphanumeric_delimeter_upper(compare_addr)
-
-        full_string_result = full_string_compare(cleaned_addr, cleaned_compare_addr)
-        group_result = group_compare(cleaned_addr, cleaned_compare_addr)
-
-        final_result = dict(full_string_result)
-        final_result.update(group_result)
-
-        final_result['cleaned_addr1'] = cleaned_addr
-        final_result['cleaned_addr2'] = cleaned_compare_addr
-
-        mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr)
-        mapped_compare = self.extractor.assumption_brute_force_search(cleaned_compare_addr)
-
-        mapped_addr1_result, mapped_addr2_result = {}, {}
-        mapped_addr1, mapped_addr2 = {}, {}
-
-        for k in self.group_keys:
-            k1 = k + '_1'
-            k2 = k + '_2'
-            if mapped_addr is None:
-                mapped_addr1_result[k1] = 'error'
-            else:
-                mapped_addr1_result[k1] = mapped_addr[k].upper()
-                mapped_addr1[k] = mapped_addr[k].upper()
-
-            if mapped_compare is None:
-                mapped_addr2_result[k2] = 'error'
-            else:
-                mapped_addr2_result[k2] = mapped_compare[k].upper()
-                mapped_addr2[k] = mapped_compare[k].upper()
-
-        final_result.update(mapped_addr1_result)
-        final_result.update(mapped_addr2_result)
-
-        mapped_group_result = None
-        mapped_full_string_result = None
-        if None not in (mapped_addr, mapped_compare):
-            mapped_group_result = group_compare(mapped_addr1, mapped_addr2)
-            mapped_addr_as_string = ''.join(mapped_addr1.values())
-            mapped_compare_as_string = ''.join(mapped_addr2.values())
-            mapped_full_string_result = full_string_compare(mapped_addr_as_string, mapped_compare_as_string)
-
-        if mapped_full_string_result is not None:
-            final_result['mapped_normal_ratio'] = mapped_full_string_result.get('normal_ratio', 0.01)
-            final_result['mapped_partial_ratio'] = mapped_full_string_result.get('partial_ratio', 0.01)
-        else:
-            final_result['mapped_normal_ratio'] = 0.01
-            final_result['mapped_partial_ratio'] = 0.01
-
-        for k in self.group_keys:
-            key = k + '_mapped_ratio'
-            if mapped_group_result is not None:
-                final_result[key] = mapped_group_result[k]
-            else:
-                final_result[key] = 0
-        return final_result
-
-    def _write_compare_result(self, type: str, mapped_addr: dict, mapped_compare: dict, full_string_result: dict,
+    def _write_compare_result(self, search_type: str, mapped_addr: dict, mapped_compare: dict, full_string_result: dict,
                               group_result: dict):
         mapped_addr1_result, mapped_addr2_result = {}, {}
         mapped_addr1, mapped_addr2 = {}, {}
@@ -299,20 +237,16 @@ class AddressComparer():
         final_result.update(mapped_addr1_result)
         final_result.update(mapped_addr2_result)
 
-        mapped_group_result = None
-        mapped_full_string_result = None
-        if None not in (mapped_addr, mapped_compare):
-            mapped_group_result = group_compare(mapped_addr1, mapped_addr2)
-            mapped_addr_as_string = ''.join(mapped_addr1.values())
-            mapped_compare_as_string = ''.join(mapped_addr2.values())
-            mapped_full_string_result = full_string_compare(mapped_addr_as_string, mapped_compare_as_string)
 
-        if mapped_full_string_result is not None:
-            final_result['mapped_normal_ratio'] = mapped_full_string_result.get('normal_ratio', 0.01)
-            final_result['mapped_partial_ratio'] = mapped_full_string_result.get('partial_ratio', 0.01)
-        else:
-            final_result['mapped_normal_ratio'] = 0.01
-            final_result['mapped_partial_ratio'] = 0.01
+        mapped_group_result = group_compare(mapped_addr1, mapped_addr2)
+
+        # Use space as delimeter to work with fuzz's comparing functions
+        mapped_addr_as_string = ' '.join(mapped_addr1.values())
+        mapped_compare_as_string = ' '.join(mapped_addr2.values())
+        mapped_full_string_result = full_string_compare(mapped_addr_as_string, mapped_compare_as_string)
+
+        final_result['mapped_normal_ratio'] = mapped_full_string_result.get('normal_ratio', 0.01)
+        final_result['mapped_partial_ratio'] = mapped_full_string_result.get('partial_ratio', 0.01)
 
         for k in self.group_keys:
             key = k + '_mapped_ratio'
@@ -320,12 +254,14 @@ class AddressComparer():
                 final_result[key] = mapped_group_result[k]
             else:
                 final_result[key] = 0
-        final_result['type'] = type
+        final_result['type'] = search_type
         return final_result
 
     def _rebuild_addresses(self, addr_pos: tuple, cleaned_addr: str):
         rebuilt_addr = []
+        # Extract with a preferred order
         key_value_pairs = utils.extract_group(cleaned_addr, addr_pos)
+        # Build with a fixed order
         for o in self.group_keys:
             rebuilt_addr.append(key_value_pairs.get(o, ''))
         # AddressExtractor expect to work with ',' as the delimeter among groups
@@ -350,8 +286,8 @@ class AddressComparer():
         mapped_compare = self.extractor.assumption_search(cleaned_addr2)
 
         full_string_result = full_string_compare(cleaned_addr1, cleaned_addr2)
-        type = mapped_addr.get('type', '') + '_' + mapped_compare.get('type', '')
-        final_result = self._write_compare_result(type=type, mapped_addr=mapped_addr,
+        search_type = mapped_addr.get('type', '') + '_' + mapped_compare.get('type', '')
+        final_result = self._write_compare_result(search_type=search_type, mapped_addr=mapped_addr,
                                                   mapped_compare=mapped_compare,
                                                   full_string_result=full_string_result, group_result=brute_compare
                                                   )
@@ -369,8 +305,8 @@ class AddressComparer():
                                            )
         addr1_pos = brute_compare.get('addr1_pos')
         addr2_pos = brute_compare.get('addr2_pos')
-        cleaned_addr1 = brute_compare['cleaned_addr1']
-        cleaned_addr2 = brute_compare['cleaned_addr2']
+        # cleaned_addr1 = brute_compare['cleaned_addr1']
+        # cleaned_addr2 = brute_compare['cleaned_addr2']
         if addr1_pos is not None and addr2_pos is not None:
             # Extract with addr1_pos/addr2_pos and rebuild with standard order street,ward,district,province
             cleaned_addr1 = self._rebuild_addresses(addr1_pos, cleaned_addr1)
@@ -380,8 +316,8 @@ class AddressComparer():
         mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2)
 
         full_string_result = full_string_compare(cleaned_addr1, cleaned_addr2)
-        type = mapped_addr.get('type', '') + '_' + mapped_compare.get('type', '')
-        final_result = self._write_compare_result(type=type, mapped_addr=mapped_addr,
+        search_type = mapped_addr.get('type', '') + '_' + mapped_compare.get('type', '')
+        final_result = self._write_compare_result(search_type=search_type, mapped_addr=mapped_addr,
                                                   mapped_compare=mapped_compare,
                                                   full_string_result=full_string_result, group_result=brute_compare
                                                   )
