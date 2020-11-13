@@ -28,6 +28,7 @@ def extract_as_four_group(addr: str, group_keys: tuple):
     return result
 
 
+
 def group_compare(addr1, addr2, pos_addr1=None, pos_addr2=None):
     group_keys = ('street', 'ward', 'district', 'province')
     result = dict()
@@ -49,6 +50,10 @@ def group_compare(addr1, addr2, pos_addr1=None, pos_addr2=None):
         for k in group_keys:
             result[k] = 0
         return result
+    # Do some trick to increased matching rate
+    for k in group_keys:
+        addr1_as_groups[k] = utils.clean_and_reduce_length(addr1_as_groups[k],biased_group=k)
+        addr2_as_groups[k] = utils.clean_and_reduce_length(addr2_as_groups[k],biased_group=k)
 
     for k in group_keys:
         if len(addr1_as_groups[k]) == 0 and len(addr2_as_groups[k]) == 0:
@@ -80,15 +85,135 @@ class AddressComparer():
         order = ('street', 'ward', 'district', 'province')
         self.extractor = address_extract.AddressExtractor()
         self.group_keys = order
-        self.possibilities = list(permutations(order, len(order)))
+        self.possibilities = tuple(permutations(order, len(order)))
 
-    def _compare_address_one_to_many(self, cleaned_addr, cleaned_compare_addr, biased_order):
+    def _long_brute_compare(self, cleaned_addr_1, cleaned_addr_2):
         brute_result = {}
         for k in self.group_keys:
             brute_result[k] = []
-        addr_as_dict = extract_as_four_group(cleaned_addr, group_keys=biased_order)
+        for pos in self.possibilities:
+            addr_as_dict = extract_as_four_group(cleaned_addr_1, group_keys=pos)
+            for com in self.possibilities:
+                compare_addr_as_dict = extract_as_four_group(cleaned_addr_2, group_keys=com)
+                result = group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=pos, pos_addr2=com)
+                for k in self.group_keys:
+                    brute_result[k].append(result[k])
+        print("long brute compare")
+        return brute_result
+
+    def _do_compare_one_to_many_for_brute_compare(self, cleaned_addr_1, cleaned_addr_2, is_reversed=None):
+        final_result = {'addr1_pos': None, 'addr2_pos': None}
+        no_of_possibility = len(self.possibilities)
+        # To work with addresses which can be splited into >= 2 parts
+        brute_result = None
+        if is_reversed is None:
+            brute_result = self._long_brute_compare(cleaned_addr_1, cleaned_addr_2)
+        # is_reversed is flag to work with all-in-one address
+        elif not is_reversed:
+            brute_result = self._long_brute_compare(cleaned_addr_1, cleaned_addr_2)
+        elif is_reversed:
+            brute_result = self._long_brute_compare(cleaned_addr_2, cleaned_addr_1)
+        index = self._index_best_match(brute_result, no_of_possibility, no_of_possibility)
+        if brute_result is not None:
+            if index >= 0:
+                for k in self.group_keys:
+                    final_result[k] = brute_result[k][index]
+                outter_index = index // no_of_possibility
+                inner_index = index % no_of_possibility
+                if is_reversed is None:
+                    final_result['addr1_pos'] = self.possibilities[outter_index]
+                    final_result['addr2_pos'] = self.possibilities[inner_index]
+                elif not is_reversed:
+                    final_result['addr1_pos'] = self.possibilities[outter_index]
+                    final_result['addr2_pos'] = self.possibilities[inner_index]
+                else:
+                    final_result['addr2_pos'] = self.possibilities[outter_index]
+                    final_result['addr1_pos'] = self.possibilities[inner_index]
+                return final_result
+        for k in self.group_keys:
+            final_result[k] = 0.1
+        return final_result
+
+    # Return guess order for all in one address
+    def _compare_address_one_to_many_with_biased_orders(self, cleaned_addr, cleaned_compare_addr, biased_orders):
+        brute_result = {}
+        for k in self.group_keys:
+            brute_result[k] = []
+        p_index, d_index, w_index = -1, -1, -1
+        for i in range(len(biased_orders)):
+            biased_order = biased_orders[i]
+            step_result = self._compare_address_one_to_many(cleaned_addr, cleaned_compare_addr, biased_order)
+            # Need to revise here
+            for k in self.group_keys:
+                brute_result[k].extend(step_result[k])
+
+            # Get info to decide guess order for all in one address
+            if i == 0:
+                p_index = self._index_best_match_no_biased(step_result, 1, 24)
+            elif i == 1:
+                d_index = self._index_best_match_no_biased(step_result, 1, 24)
+            elif i == 2:
+                w_index = self._index_best_match_no_biased(step_result, 1, 24)
+        province_oriented_order = self.possibilities[p_index]
+        district_oriented_order = self.possibilities[d_index]
+        ward_oriented_order = self.possibilities[w_index]
+
+        if p_index >= 0:
+            # default_result = {}
+            # for k in self.group_keys:
+            #     default_result[k] = brute_result[k][p_index]
+            if p_index == d_index and p_index == w_index:
+                return brute_result, province_oriented_order
+            else:
+                try:
+                    index_set = {province_oriented_order.index('province'), district_oriented_order.index('district'),
+                                 ward_oriented_order.index('ward')}
+                    guess_order = {}
+                    for k in self.group_keys:
+                        guess_order[k] = -1
+                    if len(index_set) == 3:
+                        guess_order['province'] = province_oriented_order.index('province')
+                        guess_order['district'] = district_oriented_order.index('district')
+                        guess_order['ward'] = ward_oriented_order.index('ward')
+                        for i in range(4):
+                            if i not in index_set:
+                                guess_order['street'] = i
+                                break
+                        if len(guess_order.values()) == 4:
+                            guess = []
+                            for k in self.group_keys:
+                                if guess_order[k] == 0:
+                                    guess.append('street')
+                                elif guess_order[k] == 1:
+                                    guess.append('ward')
+                                elif guess_order[k] == 2:
+                                    guess.append('district')
+                                elif guess_order[k] == 3:
+                                    guess.append('province')
+                            if len(guess) == 4:
+                                # ratios = []
+                                # ratios.append(brute_result['province'][p_index])
+                                # ratios.append(brute_result['district'][24 + d_index])
+                                # ratios.append(brute_result['ward'][48 + w_index])
+                                # ratios.append(0)
+                                # final = dict([[guess,ratios]])
+                                # return brute_result, final
+                                return brute_result, tuple(guess)
+                        return brute_result, province_oriented_order
+                    else:
+                        return brute_result, province_oriented_order
+                except:
+                    return brute_result, province_oriented_order
+        else:
+            return brute_result, None
+
+    def _compare_address_one_to_many(self, addr, compare_addr, biased_order):
+        brute_result = {}
+        for k in self.group_keys:
+            brute_result[k] = []
+        addr_as_dict = extract_as_four_group(addr, group_keys=biased_order)
         for com in self.possibilities:
-            compare_addr_as_dict = extract_as_four_group(cleaned_compare_addr, group_keys=com)
+            compare_addr_as_dict = extract_as_four_group(compare_addr, group_keys=com)
             result = group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=biased_order,
                                    pos_addr2=com)
             for k in self.group_keys:
@@ -96,33 +221,49 @@ class AddressComparer():
         return brute_result
 
     def _index_best_match(self, brute_result: dict, no_of_possibility_outer: int, no_of_possibility_inner: int):
-        max = 0
+        max_value = 0
         index = -1
         key_biases = {'province': 0.4, 'district': 0.3, 'ward': 0.2, 'street': 0.1}
 
         for i in range(no_of_possibility_outer * no_of_possibility_inner):
             average = 0
-            province_ratio = brute_result['province'][i]
-            district_ratio = brute_result['district'][i]
-            ward_ratio = brute_result['ward'][i]
-            if province_ratio <= 10:
-                continue
-            elif province_ratio <= 10 and district_ratio <= 10:
-                continue
-            elif province_ratio <= 10 and district_ratio <= 10 and ward_ratio <= 10:
-                continue
-            else:
-                for o in self.group_keys:
-                    average += brute_result[o][i] * key_biases[o]
-            if average > max:
-                max = average
+            # province_ratio = brute_result['province'][i]
+            # district_ratio = brute_result['district'][i]
+            # ward_ratio = brute_result['ward'][i]
+            # if province_ratio <= 15:
+            #     continue
+            # else:
+            #     for o in self.group_keys:
+            #         average += brute_result[o][i] * key_biases[o]
+            for o in self.group_keys:
+                average += brute_result[o][i] * key_biases[o]
+            if average > max_value:
+                max_value = average
                 index = i
         return index
+
+    def _index_best_match_no_biased(self, brute_result: dict, no_of_possibility_outer: int,
+                                    no_of_possibility_inner: int):
+        max_value = 0
+        index = -1
+        for i in range(no_of_possibility_outer * no_of_possibility_inner):
+            average = 0
+            for o in self.group_keys:
+                average += brute_result[o][i]
+            if average >= max_value:
+                max_value = average
+                index = i
+        return index
+    def _inject_all_into_groups(self, addr):
+        new_addr_group = []
+        for _ in range(len(self.group_keys)):
+            new_addr_group.append(addr)
+        new_addr = ','.join(new_addr_group)
+        return new_addr
 
     def brute_compare(self, addr: str, compare_addr: str, is_cleaned=False, no_part_of_addr=4,
                       no_part_of_compare_addr=4):
         brute_result = {}
-        no_of_possibility = len(self.possibilities)
         for k in self.group_keys:
             brute_result[k] = []
         final_result = {'addr1_pos': None, 'addr2_pos': None}
@@ -134,79 +275,37 @@ class AddressComparer():
         final_result['cleaned_addr1'] = cleaned_addr
         final_result['cleaned_addr2'] = cleaned_compare_addr
 
-        biased_order = ('province', 'district', 'ward', 'street')
         if no_part_of_addr == 1 and no_part_of_compare_addr == 1:
-            addr_as_dict = extract_as_four_group(cleaned_addr, group_keys=biased_order)
-            compare_addr_as_dict = extract_as_four_group(cleaned_compare_addr, group_keys=biased_order)
+            biased_order = ('street', 'ward', 'district', 'province')
+            new_addr_1 = self._inject_all_into_groups(cleaned_addr)
+            new_addr_2 = self._inject_all_into_groups(cleaned_compare_addr)
+            addr_as_dict = extract_as_four_group(new_addr_1, group_keys=biased_order)
+            compare_addr_as_dict = extract_as_four_group(new_addr_2, group_keys=biased_order)
             result = group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=biased_order,
                                    pos_addr2=biased_order)
             final_result.update(result)
             final_result['addr1_pos'] = biased_order
             final_result['addr2_pos'] = biased_order
-            return final_result
-        elif no_part_of_addr == 1 and no_part_of_compare_addr > 1:
-            compare_result = self._compare_address_one_to_many(cleaned_addr=cleaned_addr,
-                                                               cleaned_compare_addr=cleaned_compare_addr,
-                                                               biased_order=biased_order
-                                                               )
-            brute_result.update(compare_result)
-            # Do a look up to find the best match
-            index = self._index_best_match(brute_result, 1, no_of_possibility);
-            if index >= 0:
-                for k in self.group_keys:
-                    final_result[k] = brute_result[k][index]
-                final_result['addr1_pos'] = biased_order
-                final_result['addr2_pos'] = self.possibilities[index]
-                return final_result
+        elif no_part_of_addr == 1 or no_part_of_compare_addr == 1:
+            # Do clean, reduce and inject all-in-one string into each group of the address
+            if no_part_of_addr == 1:
+                new_addr = self._inject_all_into_groups(cleaned_addr)
+                compare_result = self._do_compare_one_to_many_for_brute_compare(cleaned_addr_1=new_addr,
+                                                                                cleaned_addr_2=cleaned_compare_addr,
+                                                                                is_reversed=False)
+                final_result.update(compare_result)
             else:
-                for k in self.group_keys:
-                    final_result[k] = 0.1
-                return final_result
-        elif no_part_of_compare_addr == 1 and no_part_of_addr > 1:
-            compare_result = self._compare_address_one_to_many(cleaned_addr=cleaned_compare_addr,
-                                                               cleaned_compare_addr=cleaned_addr,
-                                                               biased_order=biased_order
-                                                               )
-            brute_result.update(compare_result)
-            # Do a look up to find the best match
-            index = self._index_best_match(brute_result, 1, no_of_possibility);
-            if index >= 0:
-                for k in self.group_keys:
-                    final_result[k] = brute_result[k][index]
-                final_result['addr1_pos'] = self.possibilities[index]
-                final_result['addr2_pos'] = biased_order
-                return final_result
-            else:
-                for k in self.group_keys:
-                    final_result[k] = 0.1
-                return final_result
+                new_addr = self._inject_all_into_groups(cleaned_compare_addr)
+                compare_result = self._do_compare_one_to_many_for_brute_compare(cleaned_addr_1=cleaned_addr,
+                                                                                cleaned_addr_2=new_addr,
+                                                                                is_reversed=True)
+                final_result.update(compare_result)
         else:
-            for pos in self.possibilities:
-                addr_as_dict = extract_as_four_group(cleaned_addr, group_keys=pos)
-                for com in self.possibilities:
-                    compare_addr_as_dict = extract_as_four_group(cleaned_compare_addr, group_keys=com)
-                    result = group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=pos, pos_addr2=com)
-                    for k in self.group_keys:
-                        brute_result[k].append(result[k])
-            print("long brute compare")
-            index = self._index_best_match(brute_result, no_of_possibility, no_of_possibility)
+            compare_result = self._do_compare_one_to_many_for_brute_compare(cleaned_addr_1=cleaned_addr,
+                                                                            cleaned_addr_2=cleaned_compare_addr)
+            final_result.update(compare_result)
+        return final_result
 
-            if index >= 0:
-                for k in self.group_keys:
-                    final_result[k] = brute_result[k][index]
-                outter_index = index // no_of_possibility
-                inner_index = index % no_of_possibility
-                final_result['addr1_pos'] = self.possibilities[outter_index]
-                final_result['addr2_pos'] = self.possibilities[inner_index]
-                # print(index)
-                # print(outter_index)
-                # print(inner_index)
-                # print(max)
-                return final_result
-            else:
-                for k in self.group_keys:
-                    final_result[k] = 0.1
-                return final_result
 
     def _write_compare_result(self, search_type: str, mapped_addr: dict, mapped_compare: dict, full_string_result: dict,
                               group_result: dict):
@@ -219,6 +318,7 @@ class AddressComparer():
         final_result = dict(full_string_result)
         final_result.update(group_result)
 
+        # Write mapped values
         for k in self.group_keys:
             k1 = k + '_1'
             k2 = k + '_2'
@@ -234,10 +334,14 @@ class AddressComparer():
                 mapped_addr2_result[k2] = mapped_compare[k].upper()
                 mapped_addr2[k] = mapped_compare[k].upper()
 
+        # For evaluation
+        mapped_addr1_result['count'] = mapped_addr.get('count',0)
+        mapped_addr2_result['count'] = mapped_compare.get('count',0)
+
         final_result.update(mapped_addr1_result)
         final_result.update(mapped_addr2_result)
 
-
+        # Evaluate matching ratio after mapping
         mapped_group_result = group_compare(mapped_addr1, mapped_addr2)
 
         # Use space as delimeter to work with fuzz's comparing functions
@@ -267,59 +371,41 @@ class AddressComparer():
         # AddressExtractor expect to work with ',' as the delimeter among groups
         return ','.join(rebuilt_addr)
 
-    def _compare_with_assumption_search_sorted(self, cleaned_addr1, cleaned_addr2, key_value_pairs1, key_value_pairs2):
-        no_of_groups_addr1 = len(key_value_pairs1.keys())
-        no_of_groups_addr2 = len(key_value_pairs2.keys())
-
-        brute_compare = self.brute_compare(cleaned_addr1, cleaned_addr2, is_cleaned=True,
-                                           no_part_of_addr=no_of_groups_addr1,
-                                           no_part_of_compare_addr=no_of_groups_addr2
-                                           )
-        addr1_pos = brute_compare.get('addr1_pos')
-        addr2_pos = brute_compare.get('addr2_pos')
-        if addr1_pos is not None and addr2_pos is not None:
-            cleaned_addr1 = self._rebuild_addresses(addr1_pos, cleaned_addr1)
-            cleaned_addr2 = self._rebuild_addresses(addr2_pos, cleaned_addr2)
-
-        # assumption_search expect province to be the last part
-        mapped_addr = self.extractor.assumption_search(cleaned_addr1)
-        mapped_compare = self.extractor.assumption_search(cleaned_addr2)
-
-        full_string_result = full_string_compare(cleaned_addr1, cleaned_addr2)
-        search_type = mapped_addr.get('type', '') + '_' + mapped_compare.get('type', '')
-        final_result = self._write_compare_result(search_type=search_type, mapped_addr=mapped_addr,
-                                                  mapped_compare=mapped_compare,
-                                                  full_string_result=full_string_result, group_result=brute_compare
-                                                  )
-
-        return final_result
-
     def _compare_with_assumption_brute_force_search(self, cleaned_addr1, cleaned_addr2, key_value_pairs1,
                                                     key_value_pairs2):
         no_of_groups_addr1 = len(key_value_pairs1.keys())
         no_of_groups_addr2 = len(key_value_pairs2.keys())
 
-        brute_compare = self.brute_compare(cleaned_addr1, cleaned_addr2, is_cleaned=True,
-                                           no_part_of_addr=no_of_groups_addr1,
-                                           no_part_of_compare_addr=no_of_groups_addr2
-                                           )
-        addr1_pos = brute_compare.get('addr1_pos')
-        addr2_pos = brute_compare.get('addr2_pos')
-        # cleaned_addr1 = brute_compare['cleaned_addr1']
-        # cleaned_addr2 = brute_compare['cleaned_addr2']
-        if addr1_pos is not None and addr2_pos is not None:
+        # Try to find the best matching possibilities for address 1 and 2
+        brute_result = self.brute_compare(cleaned_addr1, cleaned_addr2, is_cleaned=True,
+                                          no_part_of_addr=no_of_groups_addr1,
+                                          no_part_of_compare_addr=no_of_groups_addr2
+                                          )
+        addr1_pos = brute_result.get('addr1_pos')
+        addr2_pos = brute_result.get('addr2_pos')
+
+        # Consider to change the logic here
+        if no_of_groups_addr1 == 1 and no_of_groups_addr2 == 1:
+            cleaned_addr1 = self._inject_all_into_groups(cleaned_addr1)
+            cleaned_addr2 = self._inject_all_into_groups(cleaned_addr2)
+        # If found, use that info to create an preferred order
+        elif addr1_pos is not None and addr2_pos is not None:
             # Extract with addr1_pos/addr2_pos and rebuild with standard order street,ward,district,province
             cleaned_addr1 = self._rebuild_addresses(addr1_pos, cleaned_addr1)
             cleaned_addr2 = self._rebuild_addresses(addr2_pos, cleaned_addr2)
 
+        # Try to find standardized province, district and ward
+        # This function expect an address as: street, ward, district, province
         mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1)
         mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2)
 
         full_string_result = full_string_compare(cleaned_addr1, cleaned_addr2)
         search_type = mapped_addr.get('type', '') + '_' + mapped_compare.get('type', '')
+
+        # Evaluate and return both results of before and after mapping
         final_result = self._write_compare_result(search_type=search_type, mapped_addr=mapped_addr,
                                                   mapped_compare=mapped_compare,
-                                                  full_string_result=full_string_result, group_result=brute_compare
+                                                  full_string_result=full_string_result, group_result=brute_result
                                                   )
         return final_result
 
@@ -335,34 +421,6 @@ class AddressComparer():
         # Do simple cleaning
         cleaned_addr1 = utils.clean_alphanumeric_delimeter_upper(addr)
         cleaned_addr2 = utils.clean_alphanumeric_delimeter_upper(compare_addr)
-
-        # if no_of_groups_addr1 == 4 and no_of_groups_addr2 == 4:
-        #     # 1st: find the best permutation of the 2 addresses, with highest match rate
-        #     # 2nd: do brute force search to mapped thoses address to standardized domain
-        #     # 3rd: try some comparison after mapping
-        #     return self._compare_with_assumption_brute_force_search(cleaned_addr1, cleaned_addr2)
-        # elif no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
-        #     return None
-        # else:
-        #     # In this case, those 2 addresses should not be aligned: do comparison as the whole string
-        #     return self._compare_with_assumption_search(cleaned_addr1, cleaned_addr2)
-
-        # if no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
-        #     return None
-        # elif no_of_groups_addr1 == 1 or no_of_groups_addr2 == 1:
-        #     return self._compare_with_assumption_search(cleaned_addr1, cleaned_addr2)
-        # else:
-        #     return self._compare_with_assumption_brute_force_search(cleaned_addr1, cleaned_addr2)
-
-        # if no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
-        #     return None
-        # elif no_of_groups_addr1 == 1 or no_of_groups_addr2 == 1:
-        #     return self._compare_with_assumption_search_sorted(cleaned_addr1, cleaned_addr2,
-        #                                                        key_value_pairs1=key_value_pairs1,
-        #                                                        key_value_pairs2=key_value_pairs2,
-        #                                                        )
-        # else:
-        #     return self._compare_with_assumption_brute_force_search(cleaned_addr1, cleaned_addr2)
 
         if no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
             return None
