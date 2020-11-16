@@ -1,6 +1,5 @@
-from .address_extract import address_extract
-from .address_extract import utils
-
+# from address_extract import address_extract, utils
+from .address_extract import address_extract, utils
 from fuzzywuzzy import fuzz
 from itertools import permutations
 
@@ -68,7 +67,7 @@ class AddressComparer:
             if len(addr1_as_groups[k]) == 0 and len(addr2_as_groups[k]) == 0:
                 ratio = 0.01
             elif len(addr1_as_groups[k]) > 0 and len(addr2_as_groups[k]) > 0:
-                ratio = fuzz.ratio(addr1_as_groups[k], addr2_as_groups[k])
+                ratio = fuzz.partial_ratio(addr1_as_groups[k], addr2_as_groups[k])
             else:
                 ratio = 0
             result[k] = ratio
@@ -317,7 +316,7 @@ class AddressComparer:
             cleaned_addr2 = self._rebuild_addresses(addr2_pos, cleaned_addr2)
 
         # Try to find standardized province, district and ward
-        # This function expect an address as: street, ward, district, province
+        # assumption_brute_force_search() expect an address as: street, ward, district, province
         fall_back_result = dict()
         for k in self.__group_keys:
             fall_back_result[k] = ""
