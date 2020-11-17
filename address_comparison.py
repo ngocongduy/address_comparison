@@ -176,10 +176,12 @@ class AddressComparer:
 
     def brute_compare(self, addr: str, compare_addr: str, is_cleaned=False, no_part_of_addr=4,
                       no_part_of_compare_addr=4):
-        brute_result = {}
-        for k in self.__group_keys:
-            brute_result[k] = []
         final_result = {'addr1_pos': None, 'addr2_pos': None}
+        # brute_result = {}
+        for k in self.__group_keys:
+            # brute_result[k] = []
+            final_result[k] = 0
+
         if not is_cleaned:
             cleaned_addr = utils.clean_alphanumeric_delimeter_upper(addr)
             cleaned_compare_addr = utils.clean_alphanumeric_delimeter_upper(compare_addr)
@@ -190,17 +192,27 @@ class AddressComparer:
 
         if no_part_of_addr == 1 and no_part_of_compare_addr == 1:
             # Should add handling for too-short string
+            # if len(cleaned_addr) > 3 and len(cleaned_compare_addr) > 3:
+            #     biased_order = ('street', 'ward', 'district', 'province')
+            #     new_addr_1 = self._inject_all_into_groups(cleaned_addr)
+            #     new_addr_2 = self._inject_all_into_groups(cleaned_compare_addr)
+            #     addr_as_dict = self._extract_as_four_group(new_addr_1, group_keys=biased_order)
+            #     compare_addr_as_dict = self._extract_as_four_group(new_addr_2, group_keys=biased_order)
+            #     result = self._group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=biased_order,
+            #                                  pos_addr2=biased_order)
+            #     final_result.update(result)
+            #     final_result['addr1_pos'] = biased_order
+            #     final_result['addr2_pos'] = biased_order
             if len(cleaned_addr) > 3 and len(cleaned_compare_addr) > 3:
-                biased_order = ('street', 'ward', 'district', 'province')
-                new_addr_1 = self._inject_all_into_groups(cleaned_addr)
-                new_addr_2 = self._inject_all_into_groups(cleaned_compare_addr)
-                addr_as_dict = self._extract_as_four_group(new_addr_1, group_keys=biased_order)
-                compare_addr_as_dict = self._extract_as_four_group(new_addr_2, group_keys=biased_order)
+                biased_order = ('province', 'street', 'ward', 'district')
+                addr_as_dict = self._extract_as_four_group(cleaned_addr, group_keys=biased_order)
+                compare_addr_as_dict = self._extract_as_four_group(cleaned_compare_addr, group_keys=biased_order)
                 result = self._group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=biased_order,
                                              pos_addr2=biased_order)
                 final_result.update(result)
                 final_result['addr1_pos'] = biased_order
                 final_result['addr2_pos'] = biased_order
+
         elif no_part_of_addr == 1 or no_part_of_compare_addr == 1:
             compare_result = None
             # Do clean, reduce and inject all-in-one string into each group of the address
@@ -294,8 +306,6 @@ class AddressComparer:
                                                     key_value_pairs2):
         no_of_groups_addr1 = len(key_value_pairs1.keys())
         no_of_groups_addr2 = len(key_value_pairs2.keys())
-        if no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
-            return None
 
         # Try to find the best matching possibilities for address 1 and 2
         brute_result = self.brute_compare(cleaned_addr1, cleaned_addr2, is_cleaned=True,
@@ -305,15 +315,17 @@ class AddressComparer:
         addr1_pos = brute_result.get('addr1_pos')
         addr2_pos = brute_result.get('addr2_pos')
 
-        # Consider to change the logic here
-        if no_of_groups_addr1 == 1 and no_of_groups_addr2 == 1:
+        if no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
+            return None
+        elif no_of_groups_addr1 == 1 and no_of_groups_addr2 == 1:
             cleaned_addr1 = self._inject_all_into_groups(cleaned_addr1)
             cleaned_addr2 = self._inject_all_into_groups(cleaned_addr2)
         # If found, use that info to create an preferred order
-        elif addr1_pos is not None and addr2_pos is not None:
-            # Extract with addr1_pos/addr2_pos and rebuild with standard order street,ward,district,province
-            cleaned_addr1 = self._rebuild_addresses(addr1_pos, cleaned_addr1)
-            cleaned_addr2 = self._rebuild_addresses(addr2_pos, cleaned_addr2)
+        else:
+            if addr1_pos is not None and addr2_pos is not None:
+                # Extract with addr1_pos/addr2_pos and rebuild with standard order street,ward,district,province
+                cleaned_addr1 = self._rebuild_addresses(addr1_pos, cleaned_addr1)
+                cleaned_addr2 = self._rebuild_addresses(addr2_pos, cleaned_addr2)
 
         # Try to find standardized province, district and ward
         # assumption_brute_force_search() expect an address as: street, ward, district, province
@@ -326,14 +338,18 @@ class AddressComparer:
         fall_back_result['count'] = 0
         # Every group should > 3 characters and + 3 delimeters
         # print(cleaned_addr1)
+        mapped_addr, mapped_compare = None, None
         if len(cleaned_addr1) > 15:
-            mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1)
-        else:
+            mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1, extra_rate=60)
+            # mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1)
+        # the above block can also return None
+        if mapped_addr is None:
             mapped_addr = fall_back_result
         # print(cleaned_addr2)
         if len(cleaned_addr2) > 15:
-            mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2)
-        else:
+            mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2, extra_rate=60)
+            # mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2)
+        if mapped_compare is None:
             mapped_compare = fall_back_result
 
         full_string_result = self._full_string_compare(cleaned_addr1, cleaned_addr2)
