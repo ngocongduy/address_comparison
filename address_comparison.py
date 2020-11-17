@@ -340,6 +340,7 @@ class AddressComparer:
         # print(cleaned_addr1)
         mapped_addr, mapped_compare = None, None
         if len(cleaned_addr1) > 15:
+            # mapped_addr = self.extractor.assumption_brute_force_search_word_bag(cleaned_addr1, extra_rate=60)
             mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1, extra_rate=60)
             # mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1)
         # the above block can also return None
@@ -347,6 +348,7 @@ class AddressComparer:
             mapped_addr = fall_back_result
         # print(cleaned_addr2)
         if len(cleaned_addr2) > 15:
+            # mapped_compare = self.extractor.assumption_brute_force_search_word_bag(cleaned_addr2, extra_rate=60)
             mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2, extra_rate=60)
             # mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2)
         if mapped_compare is None:
