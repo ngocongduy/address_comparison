@@ -7,7 +7,7 @@ from itertools import permutations
 class AddressComparer:
     def __init__(self):
         order = ('street', 'ward', 'district', 'province')
-        self.extractor = address_extract.AddressExtractor()
+        self.extractor = address_extract.AddressExtractorNew()
         self.__group_keys = order
         self.__possibilities = tuple(permutations(order, len(order)))
 
@@ -59,9 +59,12 @@ class AddressComparer:
                 result[k] = 0
             return result
         # Do some trick to increased matching rate
+        # Set the magic number and mid number big to not reduce length
         for k in self.__group_keys:
-            addr1_as_groups[k] = utils.clean_and_reduce_length(addr1_as_groups[k], biased_group=k)
-            addr2_as_groups[k] = utils.clean_and_reduce_length(addr2_as_groups[k], biased_group=k)
+            addr1_as_groups[k] = utils.clean_and_reduce_length(addr1_as_groups[k], biased_group=k, magic_number=100,
+                                                               mid_number=100)
+            addr2_as_groups[k] = utils.clean_and_reduce_length(addr2_as_groups[k], biased_group=k, magic_number=100,
+                                                               mid_number=100)
 
         for k in self.__group_keys:
             if len(addr1_as_groups[k]) == 0 and len(addr2_as_groups[k]) == 0:
@@ -191,18 +194,6 @@ class AddressComparer:
         final_result['cleaned_addr2'] = cleaned_compare_addr
 
         if no_part_of_addr == 1 and no_part_of_compare_addr == 1:
-            # Should add handling for too-short string
-            # if len(cleaned_addr) > 3 and len(cleaned_compare_addr) > 3:
-            #     biased_order = ('street', 'ward', 'district', 'province')
-            #     new_addr_1 = self._inject_all_into_groups(cleaned_addr)
-            #     new_addr_2 = self._inject_all_into_groups(cleaned_compare_addr)
-            #     addr_as_dict = self._extract_as_four_group(new_addr_1, group_keys=biased_order)
-            #     compare_addr_as_dict = self._extract_as_four_group(new_addr_2, group_keys=biased_order)
-            #     result = self._group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=biased_order,
-            #                                  pos_addr2=biased_order)
-            #     final_result.update(result)
-            #     final_result['addr1_pos'] = biased_order
-            #     final_result['addr2_pos'] = biased_order
             if len(cleaned_addr) > 3 and len(cleaned_compare_addr) > 3:
                 biased_order = ('province', 'street', 'ward', 'district')
                 addr_as_dict = self._extract_as_four_group(cleaned_addr, group_keys=biased_order)
@@ -210,8 +201,6 @@ class AddressComparer:
                 result = self._group_compare(addr1=addr_as_dict, addr2=compare_addr_as_dict, pos_addr1=biased_order,
                                              pos_addr2=biased_order)
                 final_result.update(result)
-                final_result['addr1_pos'] = biased_order
-                final_result['addr2_pos'] = biased_order
 
         elif no_part_of_addr == 1 or no_part_of_compare_addr == 1:
             compare_result = None
@@ -303,7 +292,7 @@ class AddressComparer:
         return ','.join(rebuilt_addr)
 
     def _compare_with_assumption_brute_force_search(self, cleaned_addr1, cleaned_addr2, key_value_pairs1,
-                                                    key_value_pairs2):
+                                                    key_value_pairs2, all_rate=60):
         no_of_groups_addr1 = len(key_value_pairs1.keys())
         no_of_groups_addr2 = len(key_value_pairs2.keys())
 
@@ -312,20 +301,6 @@ class AddressComparer:
                                           no_part_of_addr=no_of_groups_addr1,
                                           no_part_of_compare_addr=no_of_groups_addr2
                                           )
-        addr1_pos = brute_result.get('addr1_pos')
-        addr2_pos = brute_result.get('addr2_pos')
-
-        if no_of_groups_addr1 == 0 or no_of_groups_addr2 == 0:
-            return None
-        elif no_of_groups_addr1 == 1 and no_of_groups_addr2 == 1:
-            cleaned_addr1 = self._inject_all_into_groups(cleaned_addr1)
-            cleaned_addr2 = self._inject_all_into_groups(cleaned_addr2)
-        # If found, use that info to create an preferred order
-        else:
-            if addr1_pos is not None and addr2_pos is not None:
-                # Extract with addr1_pos/addr2_pos and rebuild with standard order street,ward,district,province
-                cleaned_addr1 = self._rebuild_addresses(addr1_pos, cleaned_addr1)
-                cleaned_addr2 = self._rebuild_addresses(addr2_pos, cleaned_addr2)
 
         # Try to find standardized province, district and ward
         # assumption_brute_force_search() expect an address as: street, ward, district, province
@@ -336,21 +311,10 @@ class AddressComparer:
         fall_back_result['all_rate'] = 0
         fall_back_result['type'] = "short_address"
         fall_back_result['count'] = 0
-        # Every group should > 3 characters and + 3 delimeters
-        # print(cleaned_addr1)
-        mapped_addr, mapped_compare = None, None
-        if len(cleaned_addr1) > 15:
-            # mapped_addr = self.extractor.assumption_brute_force_search_word_bag(cleaned_addr1, extra_rate=60)
-            mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1, extra_rate=60)
-            # mapped_addr = self.extractor.assumption_brute_force_search(cleaned_addr1)
-        # the above block can also return None
+        mapped_addr = self.extractor.assumption_brute_force_search_word_dict(cleaned_addr1, all_rate=all_rate)
         if mapped_addr is None:
             mapped_addr = fall_back_result
-        # print(cleaned_addr2)
-        if len(cleaned_addr2) > 15:
-            # mapped_compare = self.extractor.assumption_brute_force_search_word_bag(cleaned_addr2, extra_rate=60)
-            mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2, extra_rate=60)
-            # mapped_compare = self.extractor.assumption_brute_force_search(cleaned_addr2)
+        mapped_compare = self.extractor.assumption_brute_force_search_word_dict(cleaned_addr2, all_rate=all_rate)
         if mapped_compare is None:
             mapped_compare = fall_back_result
 
@@ -364,7 +328,8 @@ class AddressComparer:
                                                   )
         return final_result
 
-    def fuzzy_compare(self, addr: str, compare_addr: str):
+
+    def fuzzy_compare(self, addr: str, compare_addr: str, all_rate=60):
 
         # Decide how many part/group of the address: expected a dict with 0->4 groups
         key_value_pairs1 = utils.extract_group(addr, self.__group_keys)
@@ -373,7 +338,10 @@ class AddressComparer:
         # Do simple cleaning
         cleaned_addr1 = utils.clean_alphanumeric_delimeter_upper(addr)
         cleaned_addr2 = utils.clean_alphanumeric_delimeter_upper(compare_addr)
+        if len(cleaned_addr1) <= 3 or len(cleaned_addr2) <= 3:
+            return None
         return self._compare_with_assumption_brute_force_search(cleaned_addr1, cleaned_addr2,
                                                                 key_value_pairs1=key_value_pairs1,
-                                                                key_value_pairs2=key_value_pairs2
+                                                                key_value_pairs2=key_value_pairs2,
+                                                                all_rate=all_rate
                                                                 )
