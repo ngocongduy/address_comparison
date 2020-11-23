@@ -1,5 +1,6 @@
-# from address_extract import address_extract, utils
 from .address_extract import address_extract, utils
+# from address_extract import address_extract, utils
+
 from fuzzywuzzy import fuzz
 from itertools import permutations
 
