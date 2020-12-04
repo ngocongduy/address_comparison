@@ -15,6 +15,7 @@ dist/
 
 # Log files
 *.log
+google/
 
 # Package files
 *.jar
